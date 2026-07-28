@@ -1,8 +1,6 @@
 name: Keep Server Alive
 
 on:
-  push:
-    branches: [main]
   schedule:
     - cron: '*/1 * * * *'
   workflow_dispatch:

@@ -12,59 +12,36 @@ def keep_alive():
     session.cookies.set("_identity-frontend", SESSION_COOKIE, domain="lemehost.com")
     session.headers.update({
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
-        "Referer": f"{LEMOHOST_URL}/server/view?id={SERVER_ID}",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.5",
     })
 
-    page_url = f"{LEMOHOST_URL}/server/view?id={SERVER_ID}"
-    resp = session.get(page_url, allow_redirects=True)
+    # Step 1: GET the page to get cookies set
+    resp = session.get(f"{LEMOHOST_URL}/server/view?id={SERVER_ID}", allow_redirects=True)
     print(f"GET page: {resp.status_code}")
-    print(f"Final URL: {resp.url}")
 
+    # Step 2: Extract CSRF from cookie
     csrf_token = None
-
-    # Method 1: search in HTML form
-    csrf_match = re.search(r'name="_csrf-frontend"\s+value="([^"]+)"', resp.text)
-    if csrf_match:
-        csrf_token = csrf_match.group(1)
-        print(f"CSRF from form: {csrf_token[:20]}...")
-
-    # Method 2: search with flexible spacing
-    if not csrf_token:
-        csrf_match = re.search(r'name=["\']_csrf-frontend["\'].*?value=["\']([^"\']+)["\']', resp.text, re.DOTALL)
-        if csrf_match:
-            csrf_token = csrf_match.group(1)
-            print(f"CSRF from form (flexible): {csrf_token[:20]}...")
-
-    # Method 3: extract from _csrf-frontend cookie
-    if not csrf_token:
-        csrf_cookie = session.cookies.get("_csrf-frontend")
-        if csrf_cookie:
-            decoded = urllib.parse.unquote(csrf_cookie)
-            token_match = re.search(r'"([a-zA-Z0-9]{32,})"', decoded)
-            if token_match:
-                csrf_token = token_match.group(1)
-                print(f"CSRF from cookie: {csrf_token[:20]}...")
-
-    # Method 4: search entire page for any csrf hidden input
-    if not csrf_token:
-        all_csrf = re.findall(r'csrf[^"]*"([^"]{20,})"', resp.text, re.IGNORECASE)
-        if all_csrf:
-            print(f"Found {len(all_csrf)} csrf values:")
-            for i, val in enumerate(all_csrf):
-                print(f"  [{i}] {val[:40]}...")
-            csrf_token = all_csrf[0]
+    csrf_cookie = session.cookies.get("_csrf-frontend")
+    if csrf_cookie:
+        decoded = urllib.parse.unquote(csrf_cookie)
+        token_match = re.search(r'"([a-zA-Z0-9]{32,})"', decoded)
+        if token_match:
+            csrf_token = token_match.group(1)
+            print(f"CSRF from cookie: {csrf_token}")
 
     if not csrf_token:
-        print("ERROR: Could not find CSRF token anywhere")
-        forms = re.findall(r'<form[^>]*>(.*?)</form>', resp.text[:5000], re.DOTALL)
-        print(f"Found {len(forms)} forms in first 5000 chars")
+        print("ERROR: No CSRF token found")
+        print("All cookies:", dict(session.cookies))
         return False
 
-    print(f"Using CSRF token: {csrf_token}")
-
+    # Step 3: POST with CSRF from cookie
     post_url = f"{LEMOHOST_URL}/server/{SERVER_ID}/free-plan"
+    session.headers.update({
+        "Referer": f"{LEMOHOST_URL}/server/view?id={SERVER_ID}",
+        "Origin": LEMOHOST_URL,
+        "Content-Type": "application/x-www-form-urlencoded",
+    })
     data = {
         "_csrf-frontend": csrf_token,
         "ExtendFreePlanForm[captcha]": "",
@@ -72,10 +49,10 @@ def keep_alive():
     }
     resp = session.post(post_url, data=data, allow_redirects=True)
     print(f"POST extend: {resp.status_code}")
-    print(f"Final URL after POST: {resp.url}")
+    print(f"Final URL: {resp.url}")
 
-    if resp.status_code == 200 or resp.status_code == 302:
-        print("SUCCESS: Server time extended!")
+    if resp.status_code in (200, 302):
+        print("SUCCESS!")
         return True
     else:
         print(f"FAILED: {resp.status_code}")
@@ -83,6 +60,6 @@ def keep_alive():
 
 if __name__ == "__main__":
     if not SESSION_COOKIE:
-        print("ERROR: No session cookie found")
+        print("ERROR: No session cookie")
     else:
         keep_alive()

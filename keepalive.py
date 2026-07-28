@@ -16,26 +16,22 @@ def keep_alive():
         "Accept-Language": "en-US,en;q=0.5",
     })
 
-    # Step 1: GET the page to get cookies set
     resp = session.get(f"{LEMOHOST_URL}/server/view?id={SERVER_ID}", allow_redirects=True)
     print(f"GET page: {resp.status_code}")
 
-    # Step 2: Extract CSRF from cookie
     csrf_token = None
     csrf_cookie = session.cookies.get("_csrf-frontend")
     if csrf_cookie:
         decoded = urllib.parse.unquote(csrf_cookie)
-        token_match = re.search(r'"([a-zA-Z0-9]{32,})"', decoded)
+        token_match = re.search(r'"([a-zA-Z0-9_-]{32,})"', decoded)
         if token_match:
             csrf_token = token_match.group(1)
             print(f"CSRF from cookie: {csrf_token}")
 
     if not csrf_token:
         print("ERROR: No CSRF token found")
-        print("All cookies:", dict(session.cookies))
         return False
 
-    # Step 3: POST with CSRF from cookie
     post_url = f"{LEMOHOST_URL}/server/{SERVER_ID}/free-plan"
     session.headers.update({
         "Referer": f"{LEMOHOST_URL}/server/view?id={SERVER_ID}",

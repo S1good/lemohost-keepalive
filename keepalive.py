@@ -3,7 +3,7 @@ import re
 import os
 import io
 import sys
-from PIL import Image
+from PIL import Image, ImageFilter, ImageEnhance
 import pytesseract
 import traceback
 
@@ -29,38 +29,40 @@ def solve_captcha(session, html):
     log(f"Captcha image: {w}x{h}")
 
     best = None
-    # Try grayscale first (no threshold)
-    for scale in [4, 6, 8]:
-        for psm in [6, 7, 8, 13]:
-            try:
-                copy = img.copy()
-                copy = copy.resize((w * scale, h * scale), Image.LANCZOS)
-                copy = copy.convert("L")
-                config = f"--psm {psm} --oem 3"
-                text = pytesseract.image_to_string(copy, config=config).strip()
-                text = re.sub(r'[^a-z]', '', text.lower())
-                if 3 <= len(text) <= 12:
-                    if not best or abs(len(text) - 7) < abs(len(best) - 7):
-                        best = text
-            except:
-                pass
 
-    # Try with various thresholds
-    for scale in [4, 6, 8]:
-        for thresh in [70, 80, 90, 100, 110, 120]:
-            for psm in [6, 7, 8, 13]:
+    for scale in [4, 8]:
+        for psm in [6, 7]:
+            for oem in [1, 3]:
+                # Raw grayscale
                 try:
-                    copy = img.copy()
-                    copy = copy.resize((w * scale, h * scale), Image.LANCZOS)
-                    copy = copy.convert("L")
-                    copy = copy.point(lambda x: 0 if x < thresh else 255)
-                    config = f"--psm {psm} --oem 3"
+                    copy = img.copy().resize((w * scale, h * scale), Image.LANCZOS).convert("L")
+                    config = f"--psm {psm} --oem {oem}"
                     text = pytesseract.image_to_string(copy, config=config).strip()
                     text = re.sub(r'[^a-z]', '', text.lower())
-                    if 3 <= len(text) <= 12:
-                        log(f"  try: '{text}' ({psm},{scale},{thresh})")
-                        if not best or abs(len(text) - 7) < abs(len(best) - 7):
-                            best = text
+                    if 3 <= len(text) <= 12 and (not best or len(text) > len(best)):
+                        best = text
+                except:
+                    pass
+                # Sharpened
+                try:
+                    copy = img.copy().resize((w * scale, h * scale), Image.LANCZOS).convert("L")
+                    copy = copy.filter(ImageFilter.SHARPEN)
+                    config = f"--psm {psm} --oem {oem}"
+                    text = pytesseract.image_to_string(copy, config=config).strip()
+                    text = re.sub(r'[^a-z]', '', text.lower())
+                    if 3 <= len(text) <= 12 and (not best or len(text) > len(best)):
+                        best = text
+                except:
+                    pass
+                # Binarize at 100
+                try:
+                    copy = img.copy().resize((w * scale, h * scale), Image.LANCZOS).convert("L")
+                    copy = copy.point(lambda x: 0 if x < 100 else 255)
+                    config = f"--psm {psm} --oem {oem}"
+                    text = pytesseract.image_to_string(copy, config=config).strip()
+                    text = re.sub(r'[^a-z]', '', text.lower())
+                    if 3 <= len(text) <= 12 and (not best or len(text) > len(best)):
+                        best = text
                 except:
                     pass
 

@@ -34,23 +34,31 @@ def solve_captcha(session, html):
 
 def check_remaining_time(session):
     resp = session.get(f"{LEMOHOST_URL}/server/view?id={SERVER_ID}", timeout=15)
+    html = resp.text
+
     with open("server_page.html", "w", encoding="utf-8") as f:
-        f.write(resp.text)
-    # Search for time pattern near "remaining"/"left"/"time" keywords
-    lines = resp.text.split("\n")
+        f.write(html)
+
+    # Search for "MM:SS" where SS is 00-59 and MM <= 60, near "remain" or "time"
+    lines = html.split("\n")
     for i, line in enumerate(lines):
-        if "remain" in line.lower() or "time left" in line.lower() or "time:" in line.lower():
-            print(f"DEBUG line {i}: {line.strip()[:200]}")
-            match = re.search(r'(\d+)[:\s](\d{2})', line)
+        if any(w in line.lower() for w in ["remain", "time left", "auto shutdown", "shutdown"]):
+            print(f"DEBUG line {i}: {line.strip()[:300]}")
+            match = re.search(r'\b(\d{1,2}):([0-5]\d)\b', line)
             if match:
                 mins = int(match.group(1))
-                print(f"Found time: {match.group(1)}:{match.group(2)}")
-                return mins
-    # Fallback: find any XX:XX pattern
-    match = re.search(r'(\d+):(\d{2})', resp.text)
-    if match:
-        print(f"Fallback match: {match.group(0)}")
-        return int(match.group(1))
+                if mins <= 60:
+                    print(f"Shutdown time: {match.group(0)}")
+                    return mins
+
+    # Broader: look for any MM:SS pattern with MM <= 60 anywhere
+    for match in re.finditer(r'\b(\d{1,2}):([0-5]\d)\b', html):
+        mins = int(match.group(1))
+        if mins <= 60:
+            print(f"Found time candidate: {match.group(0)}")
+            return mins
+
+    print("Could not find shutdown time on page")
     return None
 
 def keep_alive():
@@ -104,11 +112,10 @@ def keep_alive():
         if time_after and time_after >= 28:
             print("SUCCESS! Server time extended!")
             return True
-        elif "captcha" in resp.text.lower():
-            print("Captcha wrong, retrying...")
+        elif "captcha" in resp.text.lower() or (time_after and time_after < 28):
+            print(f"Time is {time_after}min, captcha might be wrong, retrying...")
         else:
-            print(f"Time not reset (got {time_after}min), retrying...")
-            continue
+            print(f"Unknown result, retrying...")
 
     print("All retries exhausted")
     return False

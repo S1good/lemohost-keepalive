@@ -28,49 +28,44 @@ def solve_captcha(session, html):
     w, h = img.size
     log(f"Captcha image: {w}x{h}")
 
+    # Save to temp file for debug
+    try:
+        with open("/tmp/captcha_debug.png", "wb") as f:
+            img.save(f)
+    except:
+        pass
+
     best = None
 
     for scale in [4, 8]:
-        for psm in [6, 7]:
+        for psm in [6, 7, 13]:
             for oem in [1, 3]:
                 # Raw grayscale
                 try:
                     copy = img.copy().resize((w * scale, h * scale), Image.LANCZOS).convert("L")
-                    config = f"--psm {psm} --oem {oem}"
-                    text = pytesseract.image_to_string(copy, config=config).strip()
+                    text = pytesseract.image_to_string(copy, config=f"--psm {psm} --oem {oem}").strip()
                     text = re.sub(r'[^a-z]', '', text.lower())
                     if 3 <= len(text) <= 12 and (not best or len(text) > len(best)):
                         best = text
                 except:
                     pass
-                # Sharpened
-                try:
-                    copy = img.copy().resize((w * scale, h * scale), Image.LANCZOS).convert("L")
-                    copy = copy.filter(ImageFilter.SHARPEN)
-                    config = f"--psm {psm} --oem {oem}"
-                    text = pytesseract.image_to_string(copy, config=config).strip()
-                    text = re.sub(r'[^a-z]', '', text.lower())
-                    if 3 <= len(text) <= 12 and (not best or len(text) > len(best)):
-                        best = text
-                except:
-                    pass
-                # Binarize at 100
-                try:
-                    copy = img.copy().resize((w * scale, h * scale), Image.LANCZOS).convert("L")
-                    copy = copy.point(lambda x: 0 if x < 100 else 255)
-                    config = f"--psm {psm} --oem {oem}"
-                    text = pytesseract.image_to_string(copy, config=config).strip()
-                    text = re.sub(r'[^a-z]', '', text.lower())
-                    if 3 <= len(text) <= 12 and (not best or len(text) > len(best)):
-                        best = text
-                except:
-                    pass
+                
+                # Dilated (thicken text) + threshold
+                for thresh in [90, 100, 110]:
+                    try:
+                        copy = img.copy().resize((w * scale, h * scale), Image.LANCZOS).convert("L")
+                        copy = copy.point(lambda x, t=thresh: 0 if x < t else 255)
+                        # Dilate dark text: MinFilter expands dark pixels
+                        copy = copy.filter(ImageFilter.MinFilter(3))
+                        text = pytesseract.image_to_string(copy, config=f"--psm {psm} --oem {oem}").strip()
+                        text = re.sub(r'[^a-z]', '', text.lower())
+                        if 3 <= len(text) <= 12 and (not best or len(text) > len(best)):
+                            best = text
+                    except:
+                        pass
 
-    if best:
-        log(f"Captcha: '{best}'")
-        return best
-    log("Captcha failed")
-    return None
+    log(f"Captcha: '{best}'")
+    return best
 
 def get_remaining_minutes(html):
     match = re.search(r'id="countdown-free-plan"[^>]*>(\d+):(\d+):(\d+)<', html)
@@ -98,12 +93,12 @@ def keep_alive():
     log("Fetching view page...")
     resp = session.get(view_url, allow_redirects=False)
     log(f"View page: {resp.status_code} URL: {resp.url} Location: {resp.headers.get('Location','none')}")
+    log(f"Cookies after view: {dict(session.cookies)}")
     if resp.status_code == 302:
         log("Session cookie invalid - redirecting to login")
         return False
     if resp.status_code != 200:
         log(f"Unexpected status: {resp.status_code}")
-        # Try following redirect
         resp = session.get(view_url)
     current = get_remaining_minutes(resp.text)
     if current and current >= 28:

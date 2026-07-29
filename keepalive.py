@@ -1,35 +1,39 @@
 import requests
 import re
 import os
-import urllib.parse
 import io
 import sys
 from PIL import Image
 import pytesseract
+import traceback
 
 LEMOHOST_URL = "https://lemehost.com"
 SERVER_ID = "10234023"
 SESSION_COOKIE = os.environ.get("LEMO_SESSION_COOKIE")
 MAX_RETRIES = 5
 
+def log(msg):
+    print(msg, flush=True)
+
 def solve_captcha(session, html):
     match = re.search(r'id="extendfreeplanform-captcha-image"[^>]*src="([^"]+)"', html)
     if not match:
         return None
     img_url = match.group(1)
-    img_resp = session.get(img_url, timeout=15)
+    img_resp = session.get(img_url)
     if img_resp.status_code != 200:
         return None
 
     img = Image.open(io.BytesIO(img_resp.content))
     w, h = img.size
+    log(f"Captcha image: {w}x{h}")
 
     best = None
     best_len = 99
     for invert in [False, True]:
-        for scale in [2, 3, 4]:
-            for thresh in [None, 130, 150, 170]:
-                for psm in [6, 7, 8, 13]:
+        for scale in [3, 4]:
+            for thresh in [None, 120, 140, 160, 180]:
+                for psm in [7, 8, 13]:
                     for whitelist in [
                         "abcdefghijklmnopqrstuvwxyz",
                         "abcdefghijklmnopqrstuvwxyz0123456789",
@@ -55,21 +59,20 @@ def solve_captcha(session, html):
                         except:
                             pass
 
-    # Also try raw grayscale with no threshold, various psms
-    for scale in [2, 3]:
-        for psm in [6, 7, 8]:
+    for scale in [3, 4]:
+        for psm in [7, 8]:
             copy = img.copy().resize((w * scale, h * scale), Image.LANCZOS).convert("L")
             config = f"--psm {psm} --oem 3"
             text = pytesseract.image_to_string(copy, config=config).strip()
             text = re.sub(r'[^a-zA-Z0-9]', '', text)
-            if 4 <= len(text) <= 6 and len(text) < best_len:
+            if 4 <= len(text) <= 8 and len(text) < best_len:
                 best = text
                 best_len = len(text)
 
     if best:
-        print(f"Captcha solved: '{best}'")
+        log(f"Captcha solved: '{best}'")
         return best
-    print("Captcha: no valid text found")
+    log("Captcha: no valid text found")
     return None
 
 def get_remaining_minutes(html):
@@ -78,9 +81,9 @@ def get_remaining_minutes(html):
         hours = int(match.group(1))
         minutes = int(match.group(2))
         total = hours * 60 + minutes
-        print(f"Server shutdown: {match.group(1)}:{match.group(2)}:{match.group(3)} ({total} min)")
+        log(f"Shutdown: {match.group(1)}:{match.group(2)}:{match.group(3)} ({total} min)")
         return total
-    print("Could not find countdown timer")
+    log("No countdown timer found")
     return None
 
 def keep_alive():
@@ -95,20 +98,22 @@ def keep_alive():
     view_url = f"{LEMOHOST_URL}/server/view?id={SERVER_ID}"
     form_url = f"{LEMOHOST_URL}/server/{SERVER_ID}/free-plan"
 
-    resp = session.get(view_url, timeout=15)
+    log("Fetching view page...")
+    resp = session.get(view_url)
+    log(f"View page: {resp.status_code}")
     current = get_remaining_minutes(resp.text)
     if current and current >= 28:
-        print(f"Already {current}min remaining, skip")
+        log(f"Already {current}min, skip")
         return True
 
     for attempt in range(1, MAX_RETRIES + 1):
-        print(f"\nAttempt {attempt}/{MAX_RETRIES}")
-        resp = session.get(form_url, allow_redirects=True, timeout=15)
+        log(f"\nAttempt {attempt}/{MAX_RETRIES}")
+        resp = session.get(form_url, allow_redirects=True)
 
         csrf_match = re.search(r'name="_csrf-frontend"[^>]*value="([^"]+)"', resp.text)
         csrf_token = csrf_match.group(1) if csrf_match else None
         if not csrf_token:
-            print("No CSRF token")
+            log("No CSRF token")
             return False
 
         till_match = re.search(r'name="ExtendFreePlanForm\[extendTill\]"[^>]*value="(\d+)"', resp.text)
@@ -129,24 +134,29 @@ def keep_alive():
             "ExtendFreePlanForm[captcha]": captcha_text,
             "ExtendFreePlanForm[extendTill]": extend_till
         }
-        resp = session.post(form_url, data=data, allow_redirects=False, timeout=15)
+        resp = session.post(form_url, data=data, allow_redirects=False)
         loc = resp.headers.get('Location', 'none')
-        print(f"POST: {resp.status_code} (Location: {loc})")
+        log(f"POST: {resp.status_code} (Location: {loc})")
 
         if resp.status_code == 302:
-            resp = session.get(view_url, timeout=15)
+            resp = session.get(view_url)
             after = get_remaining_minutes(resp.text)
             if after and after >= 28:
-                print("SUCCESS! Server time extended!")
+                log("SUCCESS! Extended!")
                 return True
         else:
-            print("Captcha rejected, retrying...")
+            log("Captcha rejected, retrying...")
 
-    print("All retries exhausted")
+    log("All retries exhausted")
     return False
 
 if __name__ == "__main__":
     if not SESSION_COOKIE:
-        print("ERROR: No LEMO_SESSION_COOKIE")
+        log("ERROR: No LEMO_SESSION_COOKIE")
         sys.exit(1)
-    sys.exit(0 if keep_alive() else 1)
+    try:
+        sys.exit(0 if keep_alive() else 1)
+    except Exception as e:
+        log(f"CRASH: {e}")
+        traceback.print_exc()
+        sys.exit(1)

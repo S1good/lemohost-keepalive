@@ -29,45 +29,23 @@ def solve_captcha(session, html):
     log(f"Captcha image: {w}x{h}")
 
     best = None
-    best_len = 99
-    for invert in [False, True]:
-        for scale in [3, 4]:
-            for thresh in [None, 120, 140, 160, 180]:
-                for psm in [7, 8, 13]:
-                    for whitelist in [
-                        "abcdefghijklmnopqrstuvwxyz",
-                        "abcdefghijklmnopqrstuvwxyz0123456789",
-                        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
-                    ]:
-                        try:
-                            copy = img.copy()
-                            copy = copy.resize((w * scale, h * scale), Image.LANCZOS)
-                            copy = copy.convert("L")
-                            if invert:
-                                copy = copy.point(lambda x: 255 - x)
-                            if thresh is not None:
-                                if invert:
-                                    copy = copy.point(lambda x: 255 if x < thresh else 0)
-                                else:
-                                    copy = copy.point(lambda x: 0 if x < thresh else 255)
-                            config = f"--psm {psm} --oem 3 -c tessedit_char_whitelist={whitelist}"
-                            text = pytesseract.image_to_string(copy, config=config).strip()
-                            text = re.sub(r'[^a-zA-Z0-9]', '', text)
-                            if 4 <= len(text) <= 8 and len(text) < best_len:
-                                best = text
-                                best_len = len(text)
-                        except:
-                            pass
-
-    for scale in [3, 4]:
-        for psm in [7, 8]:
-            copy = img.copy().resize((w * scale, h * scale), Image.LANCZOS).convert("L")
-            config = f"--psm {psm} --oem 3"
-            text = pytesseract.image_to_string(copy, config=config).strip()
-            text = re.sub(r'[^a-zA-Z0-9]', '', text)
-            if 4 <= len(text) <= 8 and len(text) < best_len:
-                best = text
-                best_len = len(text)
+    for scale in [3, 4, 5]:
+        for psm in [6, 7, 8, 13]:
+            for thresh in [None, 90, 110, 130, 150, 170, 190]:
+                try:
+                    copy = img.copy()
+                    copy = copy.resize((w * scale, h * scale), Image.LANCZOS)
+                    copy = copy.convert("L")
+                    if thresh is not None:
+                        copy = copy.point(lambda x: 0 if x < thresh else 255)
+                    config = f"--psm {psm} --oem 3"
+                    text = pytesseract.image_to_string(copy, config=config).strip()
+                    text = re.sub(r'[^a-zA-Z0-9]', '', text)
+                    if 4 <= len(text) <= 8:
+                        best = text
+                        log(f"Candidate: '{text}' (psm={psm}, scale={scale}, thresh={thresh})")
+                except:
+                    pass
 
     if best:
         log(f"Captcha solved: '{best}'")

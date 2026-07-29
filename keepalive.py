@@ -123,13 +123,17 @@ def keep_alive():
     resp = session.get(form_url, allow_redirects=True)
     log(f"Form page: {resp.status_code}")
 
-    ext_match = re.search(r'id="countdown-free-plan"[^>]*>(\d+):(\d+):(\d+)<', resp.text)
-    if ext_match:
-        h, m, s = int(ext_match.group(1)), int(ext_match.group(2)), int(ext_match.group(3))
-        total = h * 60 + m
-        log(f"Countdown: {h}:{m:02d}:{s:02d} ({total} min)")
-        if total >= 28:
-            log(f"Already {total}min, skip")
+    def get_timer(html):
+        m = re.search(r'id="countdown-free-plan"[^>]*>(\d+):(\d+):(\d+)<', html)
+        if m:
+            return int(m.group(1)) * 60 + int(m.group(2)), f"{m.group(1)}:{m.group(2)}:{m.group(3)}"
+        return None, None
+
+    before, b_str = get_timer(resp.text)
+    if before:
+        log(f"Countdown: {b_str} ({before} min)")
+        if before >= 28:
+            log(f"Already {before}min, skip")
             return True
 
     for attempt in range(1, MAX_RETRIES + 1):
@@ -147,12 +151,16 @@ def keep_alive():
         # Try without captcha first
         log("Trying without captcha...")
         r = do_post(session, form_url, csrf_token, extend_till, None)
-        log(f"POST (no captcha): {r.status_code} Location: {r.headers.get('Location','none')}")
+        log(f"POST (no captcha): {r.status_code}")
+        after, a_str = get_timer(r.text)
+        if after:
+            log(f"Timer now: {a_str} ({after} min)")
+            if after > (before or 0):
+                log("SUCCESS! Timer increased without captcha!")
+                return True
         if r.status_code == 302:
-            log("SUCCESS! Extended without captcha!")
+            log("SUCCESS (302)!")
             return True
-        elif r.status_code == 200:
-            log("Need captcha, solving...")
 
         # Solve captcha and try
         captcha_text = solve_captcha(session, resp.text)
@@ -160,8 +168,16 @@ def keep_alive():
             return False
 
         r = do_post(session, form_url, csrf_token, extend_till, captcha_text)
-        loc = r.headers.get('Location', 'none')
-        log(f"POST (with captcha): {r.status_code} (Location: {loc})")
+        log(f"POST (with captcha): {r.status_code}")
+        after, a_str = get_timer(r.text)
+        if after:
+            log(f"Timer now: {a_str} ({after} min)")
+            if after > (before or 0):
+                log("SUCCESS! Timer increased with captcha!")
+                return True
+        if r.status_code == 302:
+            log("SUCCESS (302)!")
+            return True
 
         if r.status_code == 200:
             err = re.search(r'class="help-block"[^>]*>([^<]+)<', r.text)
@@ -169,10 +185,6 @@ def keep_alive():
                 log(f"Error: {err.group(1).strip()}")
             elif "incorrect" in r.text.lower():
                 log("Error: captcha incorrect")
-
-        if r.status_code == 302:
-            log("SUCCESS! Extended!")
-            return True
 
         # Re-fetch form page for fresh CSRF + captcha
         resp = session.get(form_url, allow_redirects=True)

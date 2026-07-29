@@ -13,14 +13,15 @@ SESSION_COOKIE = os.environ.get("LEMO_SESSION_COOKIE")
 
 def solve_captcha(session, html):
     match = re.search(r'id="extendfreeplanform-captcha-image"[^>]*src="([^"]+)"', html)
-
     if not match:
-        print("ERROR: Captcha image not found")
+        print("DEBUG: Searching for captcha image...")
+        with open("page_debug.html", "w", encoding="utf-8") as f:
+            f.write(html)
+        print("DEBUG: Saved HTML to page_debug.html for inspection")
         return None
 
     img_url = match.group(1)
-    if img_url.startswith("/"):
-        img_url = LEMOHOST_URL + img_url
+    print(f"Captcha URL: {img_url}")
 
     img_resp = session.get(img_url, timeout=15)
     if img_resp.status_code != 200:
@@ -42,16 +43,9 @@ def keep_alive():
         "Accept-Language": "en-US,en;q=0.5",
     })
 
-    resp = session.get(f"{LEMOHOST_URL}/server/view?id={SERVER_ID}", allow_redirects=True, timeout=15)
-    print(f"GET page: {resp.status_code}")
-
-    if "captcha" in resp.text.lower() or "verify" in resp.text.lower():
-        captcha_text = solve_captcha(session, resp.text)
-        if not captcha_text:
-            return False
-    else:
-        captcha_text = ""
-        print("No captcha required")
+    form_url = f"{LEMOHOST_URL}/server/{SERVER_ID}/free-plan"
+    resp = session.get(form_url, allow_redirects=True, timeout=15)
+    print(f"GET form: {resp.status_code}")
 
     csrf_token = None
     csrf_cookie = session.cookies.get("_csrf-frontend")
@@ -63,12 +57,21 @@ def keep_alive():
             print(f"CSRF: {csrf_token}")
 
     if not csrf_token:
+        body_match = re.search(r'name="_csrf-frontend"[^>]*value="([^"]+)"', resp.text)
+        if body_match:
+            csrf_token = body_match.group(1)
+            print(f"CSRF from body: {csrf_token}")
+
+    if not csrf_token:
         print("ERROR: No CSRF token")
         return False
 
-    post_url = f"{LEMOHOST_URL}/server/{SERVER_ID}/free-plan"
+    captcha_text = solve_captcha(session, resp.text)
+    if captcha_text is None:
+        return False
+
     session.headers.update({
-        "Referer": f"{LEMOHOST_URL}/server/view?id={SERVER_ID}",
+        "Referer": form_url,
         "Origin": LEMOHOST_URL,
         "Content-Type": "application/x-www-form-urlencoded",
     })
@@ -77,7 +80,7 @@ def keep_alive():
         "ExtendFreePlanForm[captcha]": captcha_text,
         "ExtendFreePlanForm[extendTill]": "1785239936"
     }
-    resp = session.post(post_url, data=data, allow_redirects=True, timeout=15)
+    resp = session.post(form_url, data=data, allow_redirects=True, timeout=15)
     print(f"POST extend: {resp.status_code}")
 
     if "success" in resp.text.lower() or resp.status_code == 302:

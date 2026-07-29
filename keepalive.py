@@ -49,7 +49,7 @@ def solve_captcha(session, html):
                             config = f"--psm {psm} --oem 3 -c tessedit_char_whitelist={whitelist}"
                             text = pytesseract.image_to_string(copy, config=config).strip()
                             text = re.sub(r'[^a-zA-Z0-9]', '', text)
-                            if 4 <= len(text) <= 6 and len(text) < best_len:
+                            if 4 <= len(text) <= 8 and len(text) < best_len:
                                 best = text
                                 best_len = len(text)
                         except:

@@ -46,7 +46,6 @@ def solve_captcha(session, html):
 
     candidates = {}
 
-    # EasyOCR (best)
     if HAVE_EASYOCR:
         try:
             results = EASYOCR_READER.readtext(img_bytes, detail=0, paragraph=False)
@@ -58,7 +57,6 @@ def solve_captcha(session, html):
         except Exception as e:
             log(f"  EasyOCR error: {e}")
 
-    # pytesseract (fallback)
     if HAVE_TESSERACT and HAVE_PIL:
         try:
             img = Image.open(io.BytesIO(img_bytes))
@@ -86,18 +84,29 @@ def solve_captcha(session, html):
         except Exception as e:
             log(f"  PIL error: {e}")
 
-    # Pick best result (prefer EasyOCR, then longer text)
     if 'easyocr' in candidates:
-        chosen = candidates['easyocr']
-        log(f"Captcha: '{chosen}' (EasyOCR)")
-        return chosen
+        log(f"Captcha: '{candidates['easyocr']}' (EasyOCR)")
+        return candidates['easyocr']
     if 'tesseract' in candidates:
-        chosen = candidates['tesseract']
-        log(f"Captcha: '{chosen}' (Tesseract)")
-        return chosen
+        log(f"Captcha: '{candidates['tesseract']}' (Tesseract)")
+        return candidates['tesseract']
 
     log("Captcha failed")
     return None
+
+def do_post(session, form_url, csrf_token, extend_till, captcha_text=None):
+    data = {
+        "_csrf-frontend": csrf_token,
+        "ExtendFreePlanForm[extendTill]": extend_till
+    }
+    if captcha_text:
+        data["ExtendFreePlanForm[captcha]"] = captcha_text
+    session.headers.update({
+        "Referer": form_url,
+        "Origin": LEMOHOST_URL,
+        "Content-Type": "application/x-www-form-urlencoded",
+    })
+    return session.post(form_url, data=data, allow_redirects=False)
 
 def keep_alive():
     session = requests.Session()
@@ -114,7 +123,6 @@ def keep_alive():
     resp = session.get(form_url, allow_redirects=True)
     log(f"Form page: {resp.status_code}")
 
-    # Check if already extended
     ext_match = re.search(r'id="countdown-free-plan"[^>]*>(\d+):(\d+):(\d+)<', resp.text)
     if ext_match:
         h, m, s = int(ext_match.group(1)), int(ext_match.group(2)), int(ext_match.group(3))
@@ -136,33 +144,40 @@ def keep_alive():
         till_match = re.search(r'name="ExtendFreePlanForm\[extendTill\]"[^>]*value="(\d+)"', resp.text)
         extend_till = till_match.group(1) if till_match else "1785315284"
 
+        # Try without captcha first
+        log("Trying without captcha...")
+        r = do_post(session, form_url, csrf_token, extend_till, None)
+        log(f"POST (no captcha): {r.status_code} Location: {r.headers.get('Location','none')}")
+        if r.status_code == 302:
+            resp = session.get(form_url, allow_redirects=True)
+            ext2 = re.search(r'id="countdown-free-plan"[^>]*>(\d+):(\d+):(\d+)<', resp.text)
+            if ext2:
+                h2, m2 = int(ext2.group(1)), int(ext2.group(2))
+                total2 = h2 * 60 + m2
+                log(f"After: {h2}:{m2:02d}:{ext2.group(3)} ({total2} min)")
+                if total2 >= 28:
+                    log("SUCCESS! Extended without captcha!")
+                    return True
+        elif r.status_code == 200:
+            log("Need captcha, solving...")
+
+        # Solve captcha and try
         captcha_text = solve_captcha(session, resp.text)
         if not captcha_text:
             return False
 
-        session.headers.update({
-            "Referer": form_url,
-            "Origin": LEMOHOST_URL,
-            "Content-Type": "application/x-www-form-urlencoded",
-        })
+        r = do_post(session, form_url, csrf_token, extend_till, captcha_text)
+        loc = r.headers.get('Location', 'none')
+        log(f"POST (with captcha): {r.status_code} (Location: {loc})")
 
-        data = {
-            "_csrf-frontend": csrf_token,
-            "ExtendFreePlanForm[captcha]": captcha_text,
-            "ExtendFreePlanForm[extendTill]": extend_till
-        }
-        resp = session.post(form_url, data=data, allow_redirects=False)
-        loc = resp.headers.get('Location', 'none')
-        log(f"POST: {resp.status_code} (Location: {loc})")
-
-        if resp.status_code == 200:
-            err = re.search(r'class="help-block"[^>]*>([^<]+)<', resp.text)
+        if r.status_code == 200:
+            err = re.search(r'class="help-block"[^>]*>([^<]+)<', r.text)
             if err:
                 log(f"Error: {err.group(1).strip()}")
-            elif "incorrect" in resp.text.lower():
+            elif "incorrect" in r.text.lower():
                 log("Error: captcha incorrect")
 
-        if resp.status_code == 302:
+        if r.status_code == 302:
             resp = session.get(form_url, allow_redirects=True)
             ext2 = re.search(r'id="countdown-free-plan"[^>]*>(\d+):(\d+):(\d+)<', resp.text)
             if ext2:
@@ -172,8 +187,9 @@ def keep_alive():
                 if total2 >= 28:
                     log("SUCCESS! Extended!")
                     return True
-        else:
-            log("Captcha rejected, retrying...")
+
+        # Re-fetch form page for fresh CSRF + captcha
+        resp = session.get(form_url, allow_redirects=True)
 
     log("All retries exhausted")
     return False

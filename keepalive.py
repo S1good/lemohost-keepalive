@@ -15,15 +15,11 @@ MAX_RETRIES = 5
 def solve_captcha(session, html):
     match = re.search(r'id="extendfreeplanform-captcha-image"[^>]*src="([^"]+)"', html)
     if not match:
-        print("Captcha image not found")
         return None
-
     img_url = match.group(1)
     img_resp = session.get(img_url, timeout=15)
     if img_resp.status_code != 200:
-        print(f"Failed to download captcha: {img_resp.status_code}")
         return None
-
     img = Image.open(io.BytesIO(img_resp.content))
     img = img.convert("L")
     img = img.point(lambda x: 0 if x < 140 else 255)
@@ -38,12 +34,23 @@ def solve_captcha(session, html):
 
 def check_remaining_time(session):
     resp = session.get(f"{LEMOHOST_URL}/server/view?id={SERVER_ID}", timeout=15)
-    match = re.search(r'(\d+)\s*:\s*(\d+)', resp.text)
+    with open("server_page.html", "w", encoding="utf-8") as f:
+        f.write(resp.text)
+    # Search for time pattern near "remaining"/"left"/"time" keywords
+    lines = resp.text.split("\n")
+    for i, line in enumerate(lines):
+        if "remain" in line.lower() or "time left" in line.lower() or "time:" in line.lower():
+            print(f"DEBUG line {i}: {line.strip()[:200]}")
+            match = re.search(r'(\d+)[:\s](\d{2})', line)
+            if match:
+                mins = int(match.group(1))
+                print(f"Found time: {match.group(1)}:{match.group(2)}")
+                return mins
+    # Fallback: find any XX:XX pattern
+    match = re.search(r'(\d+):(\d{2})', resp.text)
     if match:
-        mins = int(match.group(1))
-        print(f"Server remaining time: {match.group(0)} minutes")
-        return mins
-    print("Could not read remaining time from page")
+        print(f"Fallback match: {match.group(0)}")
+        return int(match.group(1))
     return None
 
 def keep_alive():
@@ -54,11 +61,6 @@ def keep_alive():
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.5",
     })
-
-    time_before = check_remaining_time(session)
-    if time_before is not None and time_before >= 28:
-        print(f"Already {time_before}min remaining, no extend needed")
-        return True
 
     form_url = f"{LEMOHOST_URL}/server/{SERVER_ID}/free-plan"
 
@@ -74,12 +76,10 @@ def keep_alive():
             token_match = re.search(r'"([a-zA-Z0-9_-]{32,})"', decoded)
             if token_match:
                 csrf_token = token_match.group(1)
-
         if not csrf_token:
             body_match = re.search(r'name="_csrf-frontend"[^>]*value="([^"]+)"', resp.text)
             if body_match:
                 csrf_token = body_match.group(1)
-
         if not csrf_token:
             print("No CSRF token")
             return False
@@ -101,14 +101,13 @@ def keep_alive():
         resp = session.post(form_url, data=data, allow_redirects=True, timeout=15)
 
         time_after = check_remaining_time(session)
-        if time_after is not None and time_after >= 28:
+        if time_after and time_after >= 28:
             print("SUCCESS! Server time extended!")
             return True
         elif "captcha" in resp.text.lower():
             print("Captcha wrong, retrying...")
-            continue
         else:
-            print("Extend submitted but time not confirmed, retrying...")
+            print(f"Time not reset (got {time_after}min), retrying...")
             continue
 
     print("All retries exhausted")

@@ -28,29 +28,26 @@ def solve_captcha(session, html):
     w, h = img.size
     log(f"Captcha image: {w}x{h}")
 
+    # Sharpen and upscale massively
     best = None
-    for scale in [3, 4, 5]:
+    for scale in [6, 8, 10]:
+        copy = img.copy().resize((w * scale, h * scale), Image.LANCZOS)
+        copy = copy.convert("L")
         for psm in [6, 7, 8, 13]:
-            for thresh in [None, 90, 110, 130, 150, 170, 190]:
-                try:
-                    copy = img.copy()
-                    copy = copy.resize((w * scale, h * scale), Image.LANCZOS)
-                    copy = copy.convert("L")
-                    if thresh is not None:
-                        copy = copy.point(lambda x: 0 if x < thresh else 255)
-                    config = f"--psm {psm} --oem 3"
-                    text = pytesseract.image_to_string(copy, config=config).strip()
-                    text = re.sub(r'[^a-zA-Z0-9]', '', text)
-                    if 4 <= len(text) <= 8:
-                        best = text
-                        log(f"Candidate: '{text}' (psm={psm}, scale={scale}, thresh={thresh})")
-                except:
-                    pass
+            try:
+                config = f"--psm {psm} --oem 3"
+                text = pytesseract.image_to_string(copy, config=config).strip()
+                text = re.sub(r'[^a-z]', '', text.lower())
+                log(f"  psm={psm} scale={scale}: '{text}'")
+                if 3 <= len(text) <= 12 and not best:
+                    best = text
+            except:
+                pass
 
     if best:
-        log(f"Captcha solved: '{best}'")
+        log(f"Captcha: '{best}'")
         return best
-    log("Captcha: no valid text found")
+    log("Captcha failed")
     return None
 
 def get_remaining_minutes(html):
@@ -77,8 +74,15 @@ def keep_alive():
     form_url = f"{LEMOHOST_URL}/server/{SERVER_ID}/free-plan"
 
     log("Fetching view page...")
-    resp = session.get(view_url)
-    log(f"View page: {resp.status_code}")
+    resp = session.get(view_url, allow_redirects=False)
+    log(f"View page: {resp.status_code} URL: {resp.url} Location: {resp.headers.get('Location','none')}")
+    if resp.status_code == 302:
+        log("Session cookie invalid - redirecting to login")
+        return False
+    if resp.status_code != 200:
+        log(f"Unexpected status: {resp.status_code}")
+        # Try following redirect
+        resp = session.get(view_url)
     current = get_remaining_minutes(resp.text)
     if current and current >= 28:
         log(f"Already {current}min, skip")
@@ -115,6 +119,14 @@ def keep_alive():
         resp = session.post(form_url, data=data, allow_redirects=False)
         loc = resp.headers.get('Location', 'none')
         log(f"POST: {resp.status_code} (Location: {loc})")
+        if resp.status_code == 200:
+            err = re.search(r'class="help-block"[^>]*>([^<]+)<', resp.text)
+            if err:
+                log(f"Error: {err.group(1).strip()}")
+            elif "incorrect" in resp.text.lower():
+                log("Error: captcha incorrect")
+            elif "csrf" in resp.text.lower():
+                log("Error: CSRF issue")
 
         if resp.status_code == 302:
             resp = session.get(view_url)

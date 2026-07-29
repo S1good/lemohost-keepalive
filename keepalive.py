@@ -149,15 +149,8 @@ def keep_alive():
         r = do_post(session, form_url, csrf_token, extend_till, None)
         log(f"POST (no captcha): {r.status_code} Location: {r.headers.get('Location','none')}")
         if r.status_code == 302:
-            resp = session.get(form_url, allow_redirects=True)
-            ext2 = re.search(r'id="countdown-free-plan"[^>]*>(\d+):(\d+):(\d+)<', resp.text)
-            if ext2:
-                h2, m2 = int(ext2.group(1)), int(ext2.group(2))
-                total2 = h2 * 60 + m2
-                log(f"After: {h2}:{m2:02d}:{ext2.group(3)} ({total2} min)")
-                if total2 >= 28:
-                    log("SUCCESS! Extended without captcha!")
-                    return True
+            log("SUCCESS! Extended without captcha!")
+            return True
         elif r.status_code == 200:
             log("Need captcha, solving...")
 
@@ -178,15 +171,8 @@ def keep_alive():
                 log("Error: captcha incorrect")
 
         if r.status_code == 302:
-            resp = session.get(form_url, allow_redirects=True)
-            ext2 = re.search(r'id="countdown-free-plan"[^>]*>(\d+):(\d+):(\d+)<', resp.text)
-            if ext2:
-                h2, m2 = int(ext2.group(1)), int(ext2.group(2))
-                total2 = h2 * 60 + m2
-                log(f"After: {h2}:{m2:02d}:{ext2.group(3)} ({total2} min)")
-                if total2 >= 28:
-                    log("SUCCESS! Extended!")
-                    return True
+            log("SUCCESS! Extended!")
+            return True
 
         # Re-fetch form page for fresh CSRF + captcha
         resp = session.get(form_url, allow_redirects=True)

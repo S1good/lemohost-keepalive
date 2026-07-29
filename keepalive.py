@@ -12,9 +12,7 @@ SERVER_ID = "10234023"
 SESSION_COOKIE = os.environ.get("LEMO_SESSION_COOKIE")
 
 def solve_captcha(session, html):
-    match = re.search(r'<img[^>]*src=["\']([^"\']*captcha[^"\']*)["\']', html, re.IGNORECASE)
-    if not match:
-        match = re.search(r'id="verify-code"[^>]*src="([^"]+)"', html)
+    match = re.search(r'id="extendfreeplanform-captcha-image"[^>]*src="([^"]+)"', html)
 
     if not match:
         print("ERROR: Captcha image not found")

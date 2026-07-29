@@ -67,17 +67,6 @@ def solve_captcha(session, html):
     log(f"Captcha: '{best}'")
     return best
 
-def get_remaining_minutes(html):
-    match = re.search(r'id="countdown-free-plan"[^>]*>(\d+):(\d+):(\d+)<', html)
-    if match:
-        hours = int(match.group(1))
-        minutes = int(match.group(2))
-        total = hours * 60 + minutes
-        log(f"Shutdown: {match.group(1)}:{match.group(2)}:{match.group(3)} ({total} min)")
-        return total
-    log("No countdown timer found")
-    return None
-
 def keep_alive():
     session = requests.Session()
     session.cookies.set("_identity-frontend", SESSION_COOKIE, domain="lemehost.com")
@@ -87,27 +76,32 @@ def keep_alive():
         "Accept-Language": "en-US,en;q=0.5",
     })
 
-    view_url = f"{LEMOHOST_URL}/server/view?id={SERVER_ID}"
     form_url = f"{LEMOHOST_URL}/server/{SERVER_ID}/free-plan"
 
-    log("Fetching view page...")
-    resp = session.get(view_url, allow_redirects=False)
-    log(f"View page: {resp.status_code} URL: {resp.url} Location: {resp.headers.get('Location','none')}")
-    log(f"Cookies after view: {dict(session.cookies)}")
-    if resp.status_code == 302:
-        log("Session cookie invalid - redirecting to login")
+    log("Opening free-plan page directly...")
+    resp = session.get(form_url, allow_redirects=True)
+    log(f"Form page: {resp.status_code}")
+
+    csrf_match = re.search(r'name="_csrf-frontend"[^>]*value="([^"]+)"', resp.text)
+    csrf_token = csrf_match.group(1) if csrf_match else None
+    if csrf_token:
+        log(f"CSRF token found: {csrf_token[:20]}...")
+    else:
+        log("No CSRF token on form page")
         return False
-    if resp.status_code != 200:
-        log(f"Unexpected status: {resp.status_code}")
-        resp = session.get(view_url)
-    current = get_remaining_minutes(resp.text)
-    if current and current >= 28:
-        log(f"Already {current}min, skip")
-        return True
+
+    # Check if already extended
+    ext_match = re.search(r'id="countdown-free-plan"[^>]*>(\d+):(\d+):(\d+)<', resp.text)
+    if ext_match:
+        h, m, s = int(ext_match.group(1)), int(ext_match.group(2)), int(ext_match.group(3))
+        total = h * 60 + m
+        log(f"Countdown: {h}:{m:02d}:{s:02d} ({total} min)")
+        if total >= 28:
+            log(f"Already {total}min, skip")
+            return True
 
     for attempt in range(1, MAX_RETRIES + 1):
         log(f"\nAttempt {attempt}/{MAX_RETRIES}")
-        resp = session.get(form_url, allow_redirects=True)
 
         csrf_match = re.search(r'name="_csrf-frontend"[^>]*value="([^"]+)"', resp.text)
         csrf_token = csrf_match.group(1) if csrf_match else None
@@ -146,11 +140,15 @@ def keep_alive():
                 log("Error: CSRF issue")
 
         if resp.status_code == 302:
-            resp = session.get(view_url)
-            after = get_remaining_minutes(resp.text)
-            if after and after >= 28:
-                log("SUCCESS! Extended!")
-                return True
+            resp = session.get(form_url, allow_redirects=True)
+            ext2 = re.search(r'id="countdown-free-plan"[^>]*>(\d+):(\d+):(\d+)<', resp.text)
+            if ext2:
+                h2, m2 = int(ext2.group(1)), int(ext2.group(2))
+                total2 = h2 * 60 + m2
+                log(f"After: {h2}:{m2:02d}:{ext2.group(3)} ({total2} min)")
+                if total2 >= 28:
+                    log("SUCCESS! Extended!")
+                    return True
         else:
             log("Captcha rejected, retrying...")
 
